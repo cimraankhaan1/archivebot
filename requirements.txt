@@ -1,4 +1,4 @@
 pyrogram
 tgcrypto
-internetarchive
+internetarchive>=3.0.0
 requests

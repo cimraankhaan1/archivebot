@@ -2,6 +2,8 @@ import os
 import asyncio
 import tempfile
 import threading
+import time
+import math
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
@@ -12,102 +14,132 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 IA_ACCESS_KEY = os.getenv("IA_ACCESS_KEY")
 IA_SECRET_KEY = os.getenv("IA_SECRET_KEY")
 
-# ==========================================
-# QAYBTA SERVER-KA YAR EE KOYEB KHARAAJINAYA
-# ==========================================
+# --- FUNCTIONS-KA PROGRESS BAR-KA ---
+
+def get_progress_bar(percentage):
+    """Waxay dhisaysaa line-ka [■■■□□□□□]"""
+    completed = int(percentage / 10)
+    return "■" * completed + "□" * (10 - completed)
+
+def human_readable_size(size_bytes):
+    if size_bytes == 0: return "0B"
+    size_name = ("B", "KB", "MB", "GB")
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    return f"{s} {size_name[i]}"
+
+async def edit_progress_message(message, status, current, total, start_time):
+    """Waxay update ku samaynaysaa fariinta Telegram-ka"""
+    now = time.time()
+    diff = now - start_time
+    if diff == 0: return
+
+    percentage = (current / total) * 100
+    speed = current / diff
+    elapsed_time = round(diff)
+    eta = round((total - current) / speed) if speed > 0 else 0
+
+    progress_str = (
+        f"**{status}**: {percentage:.2f}%\n"
+        f"[{get_progress_bar(percentage)}]\n"
+        f"{human_readable_size(current)} of {human_readable_size(total)}\n"
+        f"Speed: {human_readable_size(speed)}/sec\n"
+        f"ETA: {eta}s"
+    )
+
+    try:
+        # Waxaan update-gareynaynaa fariinta 3-dii ilbiriqsiba mar si aan loogu dhicin Limit-ka Telegram
+        await message.edit_text(progress_str, parse_mode="Markdown")
+    except:
+        pass
+
+# --- SERVER-KA KOYEB ---
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"Bot is alive and running on Koyeb!")
+        self.wfile.write(b"Bot is alive!")
 
 def run_dummy_server():
-    # Wuxuu furayaa Port 8000 si Koyeb ay ugu baasto Health Check-ga
     server_address = ('0.0.0.0', 8000)
     httpd = HTTPServer(server_address, DummyHandler)
     httpd.serve_forever()
-# ==========================================
+
+# --- HANDLERS-KA BOT-KA ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Kusoo dhawow Bot-ka!\n\n"
-        "Fadlan ii soo dir Filim (Video) ama Document (ka yar 20MB) si aan ugu xareeyo Archive.org."
-    )
+    await update.message.reply_text("👋 Soo dir video (ka yar 20MB) si aan Archive ugu xareeyo.")
 
 async def handle_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
+    file_obj = message.video or message.document
     
-    if message.video:
-        file_obj = message.video
-    elif message.document:
-        file_obj = message.document
-    else:
-        return
-
-    # Hubi xajmiga (20MB limit)
+    if not file_obj: return
     if file_obj.file_size > 20 * 1024 * 1024:
-        await message.reply_text("❌ Cilad: File-ku wuxuu ka weyn yahay 20MB. Telegram Bot API-ga caadiga ah ma ogola.")
+        await message.reply_text("❌ File-ku waa ka weyn yahay 20MB.")
         return
 
-    await message.reply_text("⏳ Waan helay file-ka. Waxaan bilaabayaa soo dejinta (Downloading)...")
-
+    status_msg = await message.reply_text("⏳ Isku diyaarinaya soo dejinta...")
+    
     try:
-        telegram_file = await context.bot.get_file(file_obj.file_id)
-        file_name = file_obj.file_name if hasattr(file_obj, 'file_name') and file_obj.file_name else f"movie_{file_obj.file_id}.mp4"
+        tg_file = await context.bot.get_file(file_obj.file_id)
+        file_url = tg_file.file_path
+        file_name = getattr(file_obj, 'file_name', f"file_{file_obj.file_id}.mp4") or "video.mp4"
         
         with tempfile.TemporaryDirectory() as temp_dir:
             download_path = os.path.join(temp_dir, file_name)
-            await telegram_file.download_to_drive(download_path)
             
-            await message.reply_text("✅ Soo dejintu way dhamaatay. Waxaan u wareejinayaa Archive.org 📤...\n(Fadlan sug, tani wax yar ayay qaadan kartaa)")
-
-            identifier = f"tg_bot_movie_{file_obj.file_id}" 
+            # --- SOO DEJINTA (DOWNLOAD) ---
+            import requests
+            start_time = time.time()
+            response = requests.get(file_url, stream=True)
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
             
-            metadata = {
-                'title': file_name,
-                'mediatype': 'movies',
-                'description': 'Filimkan waxaa lagu soo upload-gareeyay Telegram Bot Koyeb.',
-                'creator': 'Somali Telegram Bot'
-            }
+            with open(download_path, 'wb') as f:
+                last_update = 0
+                for chunk in response.iter_content(chunk_size=1024*100): # 100KB chunks
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        # Update Telegram fariinta 2-dii ilbiriqsiba mar
+                        if time.time() - last_update > 2:
+                            await edit_progress_message(status_msg, "Downloading", downloaded, total_size, start_time)
+                            last_update = time.time()
 
-            # Upload-ka u dir Thread kale si bot-ku uusan u xanibmin
-            def do_upload():
-                upload(
-                    identifier, 
-                    files=[download_path], 
-                    metadata=metadata,
-                    access_key=IA_ACCESS_KEY, 
-                    secret_key=IA_SECRET_KEY,
-                    verbose=True
-                )
+            await status_msg.edit_text("✅ Download dhamaaday. Hadda waxaan u upload-gareynayaa Archive.org...")
 
-            await asyncio.to_thread(do_upload)
+            # --- UPLOAD-KA (ARCHIVE.ORG) ---
+            identifier = f"tg_bot_{int(time.time())}_{file_obj.file_id[:5]}"
+            start_time_up = time.time()
+            
+            def ia_callback(resource_name, total_bytes, transferred_bytes):
+                # Callback-gan wuxuu u baahan yahay inuu si tartiib ah u update gareeyo
+                # Maadaama uu ku jiro thread kale, halkan waxaan u isticmaali doonaa hab fudud
+                pass 
+
+            # Upload garaynta
+            await asyncio.to_thread(
+                upload, identifier, files=[download_path], 
+                metadata={'title': file_name, 'mediatype': 'movies'},
+                access_key=IA_ACCESS_KEY, secret_key=IA_SECRET_KEY
+            )
 
             archive_link = f"https://archive.org/details/{identifier}"
-            await message.reply_text(f"🎉 Upload-kii waa guuleystay!\n\nHalkan ka daawo ama kala deg:\n{archive_link}")
+            await status_msg.edit_text(f"🎉 Upload-kii waa guuleystay!\n\nLink: {archive_link}")
 
     except Exception as e:
-        await message.reply_text(f"❌ Cilad ayaa dhacday:\n{str(e)}")
+        await status_msg.edit_text(f"❌ Cilad: {str(e)}")
 
 def main():
-    if not BOT_TOKEN or not IA_ACCESS_KEY or not IA_SECRET_KEY:
-        print("⚠️ FADLAN Geli BOT_TOKEN, IA_ACCESS_KEY, iyo IA_SECRET_KEY Koyeb Environment Variables-ka!")
-        return
-
-    # 1. Kici Server-ka yar ee Koyeb baasaya adigoo gelinaya background-ka
-    server_thread = threading.Thread(target=run_dummy_server, daemon=True)
-    server_thread.start()
-    print("🌐 Port 8000 waa la furay si Koyeb u faraxdo...")
-
-    # 2. Kici Bot-ka
-    print("🤖 Bot-ku waa shidmay oo wuu shaqeynayaa...")
+    threading.Thread(target=run_dummy_server, daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL, handle_movie))
-    
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    print("🤖 Bot is running...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

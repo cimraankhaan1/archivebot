@@ -1,6 +1,8 @@
 import os
 import asyncio
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from internetarchive import upload
@@ -10,9 +12,26 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 IA_ACCESS_KEY = os.getenv("IA_ACCESS_KEY")
 IA_SECRET_KEY = os.getenv("IA_SECRET_KEY")
 
+# ==========================================
+# QAYBTA SERVER-KA YAR EE KOYEB KHARAAJINAYA
+# ==========================================
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and running on Koyeb!")
+
+def run_dummy_server():
+    # Wuxuu furayaa Port 8000 si Koyeb ay ugu baasto Health Check-ga
+    server_address = ('0.0.0.0', 8000)
+    httpd = HTTPServer(server_address, DummyHandler)
+    httpd.serve_forever()
+# ==========================================
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Kusoo dhawow Bot-ka ugu fiican ee Koyeb ku shaqeeya!\n\n"
+        "👋 Kusoo dhawow Bot-ka!\n\n"
         "Fadlan ii soo dir Filim (Video) ama Document (ka yar 20MB) si aan ugu xareeyo Archive.org."
     )
 
@@ -76,8 +95,13 @@ def main():
         print("⚠️ FADLAN Geli BOT_TOKEN, IA_ACCESS_KEY, iyo IA_SECRET_KEY Koyeb Environment Variables-ka!")
         return
 
-    print("🤖 Bot-ku Koyeb ayuu ka shidmay oo wuu shaqeynayaa...")
-    
+    # 1. Kici Server-ka yar ee Koyeb baasaya adigoo gelinaya background-ka
+    server_thread = threading.Thread(target=run_dummy_server, daemon=True)
+    server_thread.start()
+    print("🌐 Port 8000 waa la furay si Koyeb u faraxdo...")
+
+    # 2. Kici Bot-ka
+    print("🤖 Bot-ku waa shidmay oo wuu shaqeynayaa...")
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start_command))

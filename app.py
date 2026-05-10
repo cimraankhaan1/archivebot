@@ -18,13 +18,16 @@ app = Client("archive_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 # --- PROGRESS BAR HELPER ---
 async def progress(current, total, message, start_time, status):
     now = time.time()
-    # Aad u muhiim: 15 ilbiriqsi kasta oo kaliya edit samee si Telegram uusan kuu xannibin
+    
+    # MUHIIM: Waxaan edit gareyneynaa fariinta 15-kii ilbiriqsiba mar
+    # si looga badbaado Telegram Flood Wait (Xannibaad).
     last_edit = getattr(message, "last_edit_time", 0)
-    if now - last_edit < 15: 
+    if now - last_edit < 15:
         return
 
     percentage = current * 100 / total
-    speed = current / (now - start_time) if (now - start_time) > 0 else 0
+    elapsed_time = now - start_time
+    speed = current / elapsed_time if elapsed_time > 0 else 0
     eta = round((total - current) / speed) if speed > 0 else 0
     
     completed = int(percentage / 10)
@@ -40,19 +43,23 @@ async def progress(current, total, message, start_time, status):
     
     try:
         await message.edit_text(progress_str)
-        message.last_edit_time = now # Keydi waqtigii u dambeeyay ee la edit gareeyay
+        message.last_edit_time = now # Keydi waqtiga la edit gareeyay
     except errors.FloodWait as e:
-        # Haddii Telegram ay na dhahdo sug, waan sugeynaa inta ay na dhahdo
-        await asyncio.sleep(e.value)
+        await asyncio.sleep(e.value) # Haddii Telegram ay dhahdo sug, waan sugeynaa
     except Exception:
         pass
 
 # --- HANDLERS ---
+@app.on_message(filters.command("start"))
+async def start(client, message):
+    await message.reply_text("👋 Bot-ku waa shaqeynayaa! Iisoo dir filimka aad rabto (ilaa 2GB).")
+
 @app.on_message(filters.video | filters.document)
 async def handle_media(client, message):
     file_obj = message.video or message.document
     file_name = file_obj.file_name or "video.mp4"
-    status_msg = await message.reply_text("⏳ Isku diyaarinaya soo dejinta (Downloading)...")
+    
+    status_msg = await message.reply_text("⏳ Waxaan bilaabayaa soo dejinta (Downloading)...")
     status_msg.last_edit_time = time.time()
     start_time_dl = time.time()
 
@@ -63,28 +70,29 @@ async def handle_media(client, message):
             progress_args=(status_msg, start_time_dl, "Downloading")
         )
 
-        await status_msg.edit_text("✅ Download dhamaaday. Hadda waxaan u upload-gareynayaa Archive.org...")
-        
-        # 2. UPLOAD (ARCHIVE.ORG)
+        await status_msg.edit_text("✅ Download dhamaaday. Hadda waxaan u upload-gareynayaa Archive.org... (Fadlan sug 15s Progress-ka)")
+        status_msg.last_edit_time = time.time()
+
+        # 2. UPLOAD TO ARCHIVE
         identifier = f"tg_arch_{int(time.time())}_{message.id}"
         start_time_up = time.time()
-        last_up_time = 0
+        last_up_update = 0
 
         def upload_callback(resource_name, total_bytes, transferred_bytes):
-            nonlocal last_up_time
+            nonlocal last_up_update
             now = time.time()
-            if now - last_up_time > 15:
+            if now - last_up_update > 15:
                 asyncio.run_coroutine_threadsafe(
                     progress(transferred_bytes, total_bytes, status_msg, start_time_up, "Uploading to Archive"),
                     app.loop
                 )
-                last_up_time = now
+                last_up_update = now
 
         def do_upload():
             item = get_item(identifier)
             item.upload(
                 files=[path], 
-                metadata={'title': file_name, 'mediatype': 'movies', 'creator': 'Somali Bot'},
+                metadata={'title': file_name, 'mediatype': 'movies', 'creator': 'Telegram Bot'},
                 access_key=IA_ACCESS_KEY, 
                 secret_key=IA_SECRET_KEY,
                 callback=upload_callback
@@ -92,6 +100,7 @@ async def handle_media(client, message):
 
         await asyncio.to_thread(do_upload)
 
+        # 3. CLEANUP
         if os.path.exists(path):
             os.remove(path)
 
@@ -101,7 +110,7 @@ async def handle_media(client, message):
     except Exception as e:
         print(f"Error: {e}")
         try:
-            await status_msg.edit_text(f"❌ Cilad ayaa dhacday. Isku day mar kale dhowr daqiiqo ka dib.")
+            await status_msg.edit_text(f"❌ Cilad ayaa dhacday. Isku day mar kale.")
         except:
             pass
 
@@ -110,7 +119,7 @@ class KoyebHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is Alive")
+        self.wfile.write(b"Bot is Healthy and Running!")
 
     def do_HEAD(self): # Tani waxay xallineysaa Error 501 ee logs-kaaga
         self.send_response(200)
@@ -118,8 +127,11 @@ class KoyebHandler(BaseHTTPRequestHandler):
 
 def run_dummy_server():
     server_address = ('0.0.0.0', 8000)
-    HTTPServer(server_address, KoyebHandler).serve_forever()
+    httpd = HTTPServer(server_address, KoyebHandler)
+    print("🌐 Port 8000 is open for Koyeb Health Checks...")
+    httpd.serve_forever()
 
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
+    print("🤖 Bot is starting...")
     app.run()

@@ -6,7 +6,7 @@ from pyrogram import Client, filters, errors
 from internetarchive import upload
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# --- CONFIG ---
+# --- CONFIG (Koyeb Environment Variables) ---
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,10 +18,10 @@ app = Client("archive_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 # --- PROGRESS BAR HELPER (DOWNLOAD KALIYA) ---
 async def progress(current, total, message, start_time, status):
     now = time.time()
-    
-    # 10-kii ilbiriqsiba mar update garee si looga fogaado Flood Wait
     last_edit = getattr(message, "last_edit_time", 0)
-    if now - last_edit < 10:
+    
+    # 15-kii ilbiriqsiba mar update garee si Telegram uusan kuu xannibin
+    if now - last_edit < 15:
         return
 
     percentage = current * 100 / total
@@ -49,6 +49,11 @@ async def progress(current, total, message, start_time, status):
         pass
 
 # --- HANDLERS ---
+
+@app.on_message(filters.command("start"))
+async def start_handler(client, message):
+    await message.reply_text("✅ Bot-kii waa shaqeynayaa! Iisoo dir filim (ilaa 2GB) si aan Archive ugu xareeyo.")
+
 @app.on_message(filters.video | filters.document)
 async def handle_media(client, message):
     file_obj = message.video or message.document
@@ -65,31 +70,25 @@ async def handle_media(client, message):
             progress_args=(status_msg, start_time_dl, "Downloading")
         )
 
-        # Markay soo dhamaato edit ka dhig fariin ah in upload la bilaabay
-        await status_msg.edit_text("✅ Download dhamaaday. Hadda waxaan u upload-gareynayaa Archive.org... (Fadlan sug, kani Progress ma laha)")
+        await status_msg.edit_text("✅ Download dhamaaday. Hadda waxaa bilaabanaya Upload-ka Archive.org... (Fadlan sug dhowr daqiiqo)")
 
-        # 2. UPLOAD (BACKGROUND - Ma laha Progress Bar si uusan Error u bixin)
+        # 2. UPLOAD (BACKGROUND - MA LAHA CALLBACK)
         identifier = f"tg_arch_{int(time.time())}_{message.id}"
         
-        metadata = {
-            'title': file_name,
-            'mediatype': 'movies',
-            'creator': 'Telegram Bot'
-        }
-
         def do_upload():
             upload(
                 identifier, 
                 files=[path], 
-                metadata=metadata,
+                metadata={'title': file_name, 'mediatype': 'movies', 'creator': 'Somali Bot'},
                 access_key=IA_ACCESS_KEY, 
                 secret_key=IA_SECRET_KEY
+                # CALLBACK-GII DHIBKA KEENAYAY WAA LAGA SAARAY
             )
 
-        # Upload-ka halkan ka bilow
+        # Upload-ka ku socodsii thread kale si uusan bot-ku u istaagin
         await asyncio.to_thread(do_upload)
 
-        # 3. CLEANUP (Masax file-ka)
+        # 3. CLEANUP (Masax file-ka si disk-gu uusan u buuxsamin)
         if os.path.exists(path):
             os.remove(path)
 
@@ -97,14 +96,13 @@ async def handle_media(client, message):
         await status_msg.edit_text(f"🎉 Upload-kii waa guuleystay!\n\nLink: {link}")
 
     except Exception as e:
-        error_msg = str(e)
-        print(f"Error: {error_msg}")
+        print(f"Error detail: {e}")
         try:
-            await status_msg.edit_text(f"❌ Cilad ayaa dhacday:\n`{error_msg}`")
+            await status_msg.edit_text(f"❌ Cilad ayaa dhacday:\n`{str(e)}`")
         except:
             pass
 
-# --- KOYEB SERVER FIXED ---
+# --- KOYEB HEALTH CHECK SERVER ---
 class KoyebHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -121,4 +119,5 @@ def run_dummy_server():
 
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
+    print("🤖 Bot is starting...")
     app.run()
